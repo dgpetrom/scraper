@@ -60,20 +60,79 @@ def main():
     confluence_docs = [processor.format_confluence_document(page) for page in confluence_pages]
     logger.info(f"Processed {len(confluence_docs)} Confluence documents")
     
-    # ========== JIRA ==========
-    logger.info("Fetching Jira data...")
+    # ========== JIRA - Using Agile API ==========
+    logger.info("Fetching Jira data via Agile API...")
     
-    # Fetch LIT issues
-    lit_issues = jira_client.get_lit_issues()
-    logger.info(f"Fetched {len(lit_issues)} LIT-related issues")
+    import json
+    import requests
+    from requests.auth import HTTPBasicAuth
     
-    # Fetch Connexin issues
-    connexin_issues = jira_client.get_connexin_issues()
-    logger.info(f"Fetched {len(connexin_issues)} Connexin-related issues")
+    url = os.getenv('JIRA_URL')
+    username = os.getenv('JIRA_USERNAME')
+    api_key = os.getenv('JIRA_API_KEY')
+    auth = HTTPBasicAuth(username, api_key)
     
-    # Format documents
-    jira_docs = [processor.format_jira_document(issue) for issue in (lit_issues + connexin_issues)]
-    logger.info(f"Processed {len(jira_docs)} Jira documents")
+    jira_issues = []
+    try:
+        # Fetch from Agile API (more reliable with limited permissions)
+        response = requests.get(
+            f'{url}/rest/agile/1.0/board',
+            params={'maxResults': 50},
+            auth=auth
+        )
+        
+        if response.status_code == 200:
+            boards = response.json().get('values', [])
+            logger.info(f"Found {len(boards)} Jira boards")
+            
+            for board in boards:
+                try:
+                    board_response = requests.get(
+                        f'{url}/rest/agile/1.0/board/{board["id"]}/issue',
+                        params={'maxResults': 100},
+                        auth=auth
+                    )
+                    if board_response.status_code == 200:
+                        issues = board_response.json().get('issues', [])
+                        jira_issues.extend(issues)
+                except Exception as e:
+                    logger.debug(f"Error fetching from board {board['name']}: {e}")
+                    continue
+            
+            logger.info(f"Fetched {len(jira_issues)} total Jira issues")
+            
+            # Filter for relevant keywords
+            keywords = ['LIT', 'Connexin', 'Salesforce', 'Migration', 'Framework', 'OLT', 'MAMLITFIBER']
+            filtered_issues = []
+            for issue in jira_issues:
+                key = issue['key'].upper()
+                summary = issue['fields']['summary'].upper()
+                
+                if any(keyword.upper() in key or keyword.upper() in summary for keyword in keywords):
+                    filtered_issues.append(issue)
+            
+            logger.info(f"Filtered to {len(filtered_issues)} relevant issues")
+            
+            # Format documents
+            jira_docs = []
+            for issue in filtered_issues:
+                doc = {
+                    'id': issue['key'],
+                    'title': issue['fields']['summary'],
+                    'type': issue['fields']['issuetype']['name'],
+                    'board': issue.get('board_name', 'Unknown'),
+                    'content': f"{issue['key']}: {issue['fields']['summary']}",
+                    'source': 'jira'
+                }
+                jira_docs.append(doc)
+            
+            logger.info(f"Processed {len(jira_docs)} Jira documents")
+        else:
+            logger.warning(f"Failed to fetch Jira boards: {response.status_code}")
+            jira_docs = []
+    except Exception as e:
+        logger.error(f"Error fetching Jira data: {e}")
+        jira_docs = []
     
     # ========== MERGE AND SAVE ==========
     all_documents = processor.merge_documents(confluence_docs, jira_docs)
