@@ -51,13 +51,10 @@ def main():
     logger.info("Fetching Confluence data...")
     
     confluence_pages = []
-    # Try to fetch the root page hierarchy if available
-    page_id = os.getenv('CONFLUENCE_PAGE_ID', None)
-    if page_id:
-        confluence_pages = confluence_client.get_page_hierarchy(page_id, max_depth=5)
-    else:
-        logger.info("Fetching recent Confluence pages...")
-        confluence_pages = confluence_client.get_recent_pages(limit=20)
+    # Fetch the LitWay Salesforce Migration Framework page (ID: 5345345542)
+    page_id = os.getenv('CONFLUENCE_PAGE_ID', '5345345542')
+    logger.info(f"Fetching page hierarchy from page ID: {page_id}")
+    confluence_pages = confluence_client.get_page_hierarchy(page_id, max_depth=10)
     
     # Format documents
     confluence_docs = [processor.format_confluence_document(page) for page in confluence_pages]
