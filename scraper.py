@@ -50,9 +50,14 @@ def main():
     # ========== CONFLUENCE ==========
     logger.info("Fetching Confluence data...")
     
-    # Fetch the root page hierarchy
-    # Page ID: 5345345542 (Draft - Salesforce Migration Framework Runbook - LitWay)
-    confluence_pages = confluence_client.get_page_hierarchy('5345345542', max_depth=5)
+    confluence_pages = []
+    # Try to fetch the root page hierarchy if available
+    page_id = os.getenv('CONFLUENCE_PAGE_ID', None)
+    if page_id:
+        confluence_pages = confluence_client.get_page_hierarchy(page_id, max_depth=5)
+    else:
+        logger.info("No CONFLUENCE_PAGE_ID set, searching for Connexin/LIT pages...")
+        confluence_pages = confluence_client.search_pages('connexin', limit=10)
     
     # Format documents
     confluence_docs = [processor.format_confluence_document(page) for page in confluence_pages]

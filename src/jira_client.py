@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Jira API Client
-Handles fetching issues and data from Jira
+Jira API Client (v3)
+Handles fetching issues and data from Jira using REST API v3
 """
 
 import logging
 from typing import Dict, List, Any, Optional
-from atlassian import Jira
+import requests
+from requests.auth import HTTPBasicAuth
 
 logger = logging.getLogger(__name__)
 
@@ -14,21 +15,35 @@ logger = logging.getLogger(__name__)
 class JiraClient:
     def __init__(self, url: str, username: str, api_key: str):
         """Initialize Jira client"""
-        self.url = url
+        self.base_url = url.rstrip('/') if url else "https://cityfibre.atlassian.net"
         self.username = username
         self.api_key = api_key
-        self.client = Jira(
-            url=url,
-            username=username,
-            password=api_key,
-            cloud=True
-        )
-        logger.info(f"Jira client initialized for {url}")
+        self.auth = HTTPBasicAuth(username, api_key)
+        self.headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        }
+        logger.info(f"Jira client initialized for {self.base_url}")
 
     def search_issues(self, jql: str, limit: int = 100) -> List[Dict[str, Any]]:
-        """Search for issues using JQL query"""
+        """Search for issues using JQL query via v3 API"""
         try:
-            results = self.client.jql(jql, start=0, limit=limit, expand='changelog')
+            url = f"{self.base_url}/rest/api/3/issues/search"
+            params = {
+                "jql": jql,
+                "maxResults": limit,
+                "expand": "changelog"
+            }
+            
+            response = requests.get(
+                url,
+                params=params,
+                auth=self.auth,
+                headers=self.headers
+            )
+            response.raise_for_status()
+            
+            results = response.json()
             issues = []
             
             for issue in results.get('issues', []):
@@ -43,7 +58,7 @@ class JiraClient:
                     'created': issue.get('fields', {}).get('created', ''),
                     'updated': issue.get('fields', {}).get('updated', ''),
                     'assignee': issue.get('fields', {}).get('assignee', {}).get('displayName', 'Unassigned'),
-                    'url': f"{self.url}/browse/{issue['key']}",
+                    'url': f"{self.base_url}/browse/{issue['key']}",
                     'content': self._extract_issue_content(issue),
                     'source': 'jira'
                 }
@@ -58,8 +73,15 @@ class JiraClient:
     def get_issue_by_key(self, issue_key: str) -> Optional[Dict[str, Any]]:
         """Fetch a single issue by key"""
         try:
-            issue = self.client.get_issue(issue_key, expand='changelog')
-            return issue
+            url = f"{self.base_url}/rest/api/3/issues/{issue_key}"
+            response = requests.get(
+                url,
+                auth=self.auth,
+                headers=self.headers,
+                params={"expand": "changelog"}
+            )
+            response.raise_for_status()
+            return response.json()
         except Exception as e:
             logger.error(f"Error fetching issue {issue_key}: {str(e)}")
             return None
@@ -110,10 +132,10 @@ class JiraClient:
 
     def get_lit_issues(self) -> List[Dict[str, Any]]:
         """Fetch all issues related to LIT project"""
-        jql = 'textfields ~ "lit*" AND project in (CONNEXIN, IDA, CM)'
-        return self.search_issues(jql, limit=200)
+        jql = 'summary ~ "lit" OR description ~ "lit" OR key ~ "LIT" ORDER BY updated DESC'
+        return self.search_issues(jql, limit=100)
 
     def get_connexin_issues(self) -> List[Dict[str, Any]]:
         """Fetch all issues related to Connexin"""
-        jql = 'textfields ~ "connexin*" OR project = CONNEXIN'
-        return self.search_issues(jql, limit=200)
+        jql = 'summary ~ "connexin" OR description ~ "connexin" OR project = CONNEXIN ORDER BY updated DESC'
+        return self.search_issues(jql, limit=100)

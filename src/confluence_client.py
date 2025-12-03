@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Confluence API Client
+Confluence API Client (v1)
 Handles fetching pages, content, and hierarchies from Confluence
 """
 
 import logging
 import os
 from typing import Dict, List, Any, Optional
-from atlassian import Confluence
+import requests
+from requests.auth import HTTPBasicAuth
 from bs4 import BeautifulSoup
 import re
 
@@ -17,21 +18,31 @@ logger = logging.getLogger(__name__)
 class ConfluenceClient:
     def __init__(self, url: str, username: str, api_key: str):
         """Initialize Confluence client"""
-        self.url = url
+        self.base_url = url.rstrip('/') if url else "https://cityfibre.atlassian.net"
         self.username = username
         self.api_key = api_key
-        self.client = Confluence(
-            url=url,
-            username=username,
-            password=api_key,
-            cloud=True
-        )
-        logger.info(f"Confluence client initialized for {url}")
+        self.auth = HTTPBasicAuth(username, api_key)
+        self.headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        }
+        logger.info(f"Confluence client initialized for {self.base_url}")
 
     def get_page_by_id(self, page_id: str) -> Optional[Dict[str, Any]]:
         """Fetch a single page by ID"""
         try:
-            page = self.client.get_page_by_id(page_id, expand='body.storage,metadata')
+            url = f"{self.base_url}/wiki/api/v2/pages/{page_id}"
+            params = {
+                "body-format": "storage"
+            }
+            response = requests.get(
+                url,
+                params=params,
+                auth=self.auth,
+                headers=self.headers
+            )
+            response.raise_for_status()
+            page = response.json()
             return page
         except Exception as e:
             logger.error(f"Error fetching page {page_id}: {str(e)}")
@@ -40,8 +51,20 @@ class ConfluenceClient:
     def get_page_children(self, page_id: str) -> List[Dict[str, Any]]:
         """Get all child pages of a given page"""
         try:
-            children = self.client.get_page_child_by_type(page_id, type='page', expand='body.storage')
-            return children if children else []
+            url = f"{self.base_url}/wiki/api/v2/pages/{page_id}/children"
+            params = {
+                "limit": 250,
+                "body-format": "storage"
+            }
+            response = requests.get(
+                url,
+                params=params,
+                auth=self.auth,
+                headers=self.headers
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get('results', [])
         except Exception as e:
             logger.error(f"Error fetching children of page {page_id}: {str(e)}")
             return []
@@ -81,15 +104,21 @@ class ConfluenceClient:
                 if not page:
                     return
                 
-                # Extract content
+                # Extract content from v2 API response
+                body_content = ""
+                if 'body' in page and 'storage' in page['body']:
+                    body_content = page['body']['storage'].get('value', '')
+                elif 'body' in page and 'view' in page['body']:
+                    body_content = page['body']['view'].get('value', '')
+                
                 page_data = {
                     'id': page['id'],
-                    'title': page['title'],
-                    'url': page['_links']['webui'] if '_links' in page else f"{self.url}/wiki/spaces/{page.get('space', {}).get('key', '')}/pages/{page['id']}",
-                    'content': self.extract_text_from_html(page.get('body', {}).get('storage', {}).get('value', '')),
-                    'space': page.get('space', {}).get('key', 'UNKNOWN'),
-                    'created': page.get('metadata', {}).get('created', ''),
-                    'modified': page.get('metadata', {}).get('updated', ''),
+                    'title': page.get('title', ''),
+                    'url': page.get('_links', {}).get('webui', f"{self.base_url}/wiki/spaces/*/pages/{page.get('id', '')}"),
+                    'content': self.extract_text_from_html(body_content),
+                    'space': page.get('spaceId', 'UNKNOWN'),
+                    'created': page.get('createdAt', ''),
+                    'modified': page.get('updatedAt', ''),
                     'depth': depth,
                     'source': 'confluence'
                 }
@@ -110,17 +139,31 @@ class ConfluenceClient:
     def search_pages(self, query: str, limit: int = 50) -> List[Dict[str, Any]]:
         """Search for pages by text query"""
         try:
-            results = self.client.search_by_text(query, limit=limit)
+            url = f"{self.base_url}/wiki/api/v2/pages"
+            params = {
+                "title": query,
+                "limit": limit,
+                "body-format": "storage"
+            }
+            response = requests.get(
+                url,
+                params=params,
+                auth=self.auth,
+                headers=self.headers
+            )
+            response.raise_for_status()
+            results = response.json()
+            
             pages = []
             for result in results.get('results', []):
-                if result['type'] == 'page':
-                    pages.append({
-                        'id': result['id'],
-                        'title': result.get('title', ''),
-                        'url': self.url + result.get('url', ''),
-                        'excerpt': result.get('excerpt', ''),
-                        'source': 'confluence'
-                    })
+                pages.append({
+                    'id': result['id'],
+                    'title': result.get('title', ''),
+                    'url': result.get('_links', {}).get('webui', ''),
+                    'excerpt': result.get('body', {}).get('view', {}).get('value', '')[:200],
+                    'source': 'confluence'
+                })
+            
             return pages
         except Exception as e:
             logger.error(f"Error searching pages: {str(e)}")
