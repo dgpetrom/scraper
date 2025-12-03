@@ -56,8 +56,19 @@ def main():
     logger.info(f"Fetching page hierarchy from page ID: {page_id}")
     confluence_pages = confluence_client.get_page_hierarchy(page_id, max_depth=10)
     
-    # Format documents
-    confluence_docs = [processor.format_confluence_document(page) for page in confluence_pages]
+    # Format as simple text documents matching reference format
+    confluence_docs = []
+    for page in confluence_pages:
+        doc = {
+            'id': page['id'],
+            'text': page['content'],
+            'metadata': {
+                'source': 'Confluence',
+                'topic': page['title']
+            }
+        }
+        confluence_docs.append(doc)
+    
     logger.info(f"Processed {len(confluence_docs)} Confluence documents")
     
     # ========== JIRA - Using Agile API ==========
@@ -113,20 +124,82 @@ def main():
             
             logger.info(f"Filtered to {len(filtered_issues)} relevant issues")
             
-            # Format documents
+            # Fetch comments for each issue and format documents
             jira_docs = []
-            for issue in filtered_issues:
-                doc = {
-                    'id': issue['key'],
-                    'title': issue['fields']['summary'],
-                    'type': issue['fields']['issuetype']['name'],
-                    'board': issue.get('board_name', 'Unknown'),
-                    'content': f"{issue['key']}: {issue['fields']['summary']}",
-                    'source': 'jira'
-                }
-                jira_docs.append(doc)
+            for idx, issue in enumerate(filtered_issues):
+                try:
+                    # Fetch issue details with comments
+                    issue_detail_response = requests.get(
+                        f'{url}/rest/api/3/issue/{issue["key"]}',
+                        params={'expand': 'changelog,changelog.histories'},
+                        auth=auth
+                    )
+                    
+                    comments_text = ""
+                    if issue_detail_response.status_code == 200:
+                        issue_detail = issue_detail_response.json()
+                        changelog = issue_detail.get('changelog', {})
+                        histories = changelog.get('histories', [])
+                        
+                        # Build comments from changelog
+                        for history in histories:
+                            created = history.get('created', '')
+                            author = history.get('author', {}).get('displayName', 'Unknown')
+                            changes = history.get('items', [])
+                            
+                            for change in changes:
+                                field = change.get('field', '')
+                                from_str = change.get('fromString', '')
+                                to_str = change.get('toString', '')
+                                
+                                if field == 'comment':
+                                    comments_text += f"\n[{created}] {author}: {to_str}"
+                                elif to_str:
+                                    comments_text += f"\n[{created}] {author} - {field}: {to_str}"
+                    
+                    # Build document with reference format
+                    summary = issue['fields']['summary']
+                    description = issue['fields'].get('description', '') or ''
+                    if isinstance(description, dict):
+                        description = str(description)
+                    
+                    # Combine content: description + comments
+                    full_content = f"{summary}\n\n{description}"
+                    if comments_text:
+                        full_content += f"\n\nActivity & Comments:{comments_text}"
+                    
+                    doc = {
+                        'id': issue['key'],
+                        'text': full_content,
+                        'metadata': {
+                            'source': 'Jira',
+                            'topic': summary,
+                            'issue_type': issue['fields']['issuetype']['name'],
+                            'status': issue['fields'].get('status', {}).get('name', 'Unknown'),
+                            'created': issue['fields'].get('created', ''),
+                            'updated': issue['fields'].get('updated', ''),
+                            'url': f"{url}/browse/{issue['key']}"
+                        }
+                    }
+                    jira_docs.append(doc)
+                    
+                    if (idx + 1) % 50 == 0:
+                        logger.info(f"Processed {idx + 1}/{len(filtered_issues)} issues...")
+                        
+                except Exception as e:
+                    logger.debug(f"Error fetching details for {issue['key']}: {e}")
+                    # Still include the basic document
+                    doc = {
+                        'id': issue['key'],
+                        'text': f"{issue['fields']['summary']}",
+                        'metadata': {
+                            'source': 'Jira',
+                            'topic': issue['fields']['summary']
+                        }
+                    }
+                    jira_docs.append(doc)
             
-            logger.info(f"Processed {len(jira_docs)} Jira documents")
+            logger.info(f"Processed {len(jira_docs)} Jira documents with comments")
         else:
             logger.warning(f"Failed to fetch Jira boards: {response.status_code}")
             jira_docs = []
@@ -137,18 +210,19 @@ def main():
     # ========== MERGE AND SAVE ==========
     all_documents = processor.merge_documents(confluence_docs, jira_docs)
     
-    # Save merged documents
+    # Save merged documents in reference format
     merged_path = output_dir / 'connexin_documents_merged.json'
     processor.save_to_json(all_documents, str(merged_path))
     
-    # Save separate files
+    # Save separate files (flat format for individual sources)
     processor.save_to_json(confluence_docs, str(output_dir / 'connexin_documents_confluence.json'))
     processor.save_to_json(jira_docs, str(output_dir / 'connexin_documents_jira.json'))
     
     # Summary
     logger.info("=" * 60)
     logger.info("SCRAPING COMPLETE")
-    logger.info(f"Total documents: {len(all_documents)}")
+    total_docs = len(all_documents.get('documents', all_documents)) if isinstance(all_documents, dict) else len(all_documents)
+    logger.info(f"Total documents: {total_docs}")
     logger.info(f"  - Confluence: {len(confluence_docs)}")
     logger.info(f"  - Jira: {len(jira_docs)}")
     logger.info(f"Output directory: {output_dir.absolute()}")

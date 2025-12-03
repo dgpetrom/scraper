@@ -60,19 +60,74 @@ class DocumentProcessor:
 
     @staticmethod
     def merge_documents(confluence_docs: List[Dict[str, Any]], 
-                       jira_docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Merge Confluence and Jira documents into a single list"""
+                       jira_docs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Merge Confluence and Jira documents into reference format with sequential IDs"""
+        # Add sequential IDs to documents
+        conf_counter = 0
+        jira_counter = 0
+        
+        all_docs = []
+        
+        # Process Confluence docs
+        for doc in confluence_docs:
+            conf_counter += 1
+            doc_id = f"conf_{conf_counter:04d}"
+            
+            # Clean metadata - remove any existing id field
+            metadata = {k: v for k, v in doc['metadata'].items() if k != 'id'}
+            
+            # Structure: text, metadata, id
+            new_doc = {
+                'text': doc['text'],
+                'metadata': metadata,
+                'id': doc_id
+            }
+            all_docs.append(new_doc)
+        
+        # Process Jira docs
+        for doc in jira_docs:
+            jira_counter += 1
+            doc_id = f"jira_{jira_counter:04d}"
+            
+            # Clean metadata - remove any existing id field
+            metadata = {k: v for k, v in doc['metadata'].items() if k != 'id'}
+            
+            # Structure: text, metadata, id
+            new_doc = {
+                'text': doc['text'],
+                'metadata': metadata,
+                'id': doc_id
+            }
+            all_docs.append(new_doc)
+        
+        logger.info(f"Merged {len(confluence_docs)} Confluence documents with {len(jira_docs)} Jira documents with sequential IDs")
+        
+        # Return in reference format (wrapped in 'documents' key)
+        return {
+            'documents': all_docs
+        }
+
+    @staticmethod
+    def merge_documents_flat(confluence_docs: List[Dict[str, Any]], 
+                            jira_docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Merge Confluence and Jira documents into a single list (legacy format)"""
         all_docs = confluence_docs + jira_docs
         logger.info(f"Merged {len(confluence_docs)} Confluence documents with {len(jira_docs)} Jira documents")
         return all_docs
 
     @staticmethod
-    def save_to_json(documents: List[Dict[str, Any]], output_path: str) -> None:
+    def save_to_json(documents: Any, output_path: str) -> None:
         """Save documents to JSON file"""
         try:
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(documents, f, indent=2, ensure_ascii=False)
-            logger.info(f"Saved {len(documents)} documents to {output_path}")
+            
+            # Calculate doc count for logging
+            doc_count = len(documents)
+            if isinstance(documents, dict) and 'documents' in documents:
+                doc_count = len(documents['documents'])
+            
+            logger.info(f"Saved {doc_count} documents to {output_path}")
         except Exception as e:
             logger.error(f"Error saving to JSON: {str(e)}")
 
