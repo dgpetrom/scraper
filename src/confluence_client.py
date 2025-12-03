@@ -168,3 +168,48 @@ class ConfluenceClient:
         except Exception as e:
             logger.error(f"Error searching pages: {str(e)}")
             return []
+
+    def get_recent_pages(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Get recent pages from Confluence"""
+        try:
+            url = f"{self.base_url}/wiki/api/v2/pages"
+            params = {
+                "limit": limit,
+                "body-format": "storage"
+            }
+            response = requests.get(
+                url,
+                params=params,
+                auth=self.auth,
+                headers=self.headers
+            )
+            response.raise_for_status()
+            results = response.json()
+            
+            pages = []
+            for result in results.get('results', []):
+                # Extract content from v2 API response
+                body_content = ""
+                if 'body' in result and 'storage' in result['body']:
+                    body_content = result['body']['storage'].get('value', '')
+                elif 'body' in result and 'view' in result['body']:
+                    body_content = result['body']['view'].get('value', '')
+                
+                page_data = {
+                    'id': result['id'],
+                    'title': result.get('title', ''),
+                    'url': result.get('_links', {}).get('webui', f"{self.base_url}/wiki/spaces/*/pages/{result.get('id', '')}"),
+                    'content': self.extract_text_from_html(body_content),
+                    'space': result.get('spaceId', 'UNKNOWN'),
+                    'created': result.get('createdAt', ''),
+                    'modified': result.get('updatedAt', ''),
+                    'depth': 0,
+                    'source': 'confluence'
+                }
+                pages.append(page_data)
+                logger.info(f"Fetched recent page: {page_data['title']}")
+            
+            return pages
+        except Exception as e:
+            logger.error(f"Error fetching recent pages: {str(e)}")
+            return []

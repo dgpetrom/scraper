@@ -56,8 +56,8 @@ def main():
     if page_id:
         confluence_pages = confluence_client.get_page_hierarchy(page_id, max_depth=5)
     else:
-        logger.info("No CONFLUENCE_PAGE_ID set, searching for Connexin/LIT pages...")
-        confluence_pages = confluence_client.search_pages('connexin', limit=10)
+        logger.info("Fetching recent Confluence pages...")
+        confluence_pages = confluence_client.get_recent_pages(limit=20)
     
     # Format documents
     confluence_docs = [processor.format_confluence_document(page) for page in confluence_pages]

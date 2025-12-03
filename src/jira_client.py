@@ -25,45 +25,79 @@ class JiraClient:
         }
         logger.info(f"Jira client initialized for {self.base_url}")
 
-    def search_issues(self, jql: str, limit: int = 100) -> List[Dict[str, Any]]:
-        """Search for issues using JQL query via v3 API"""
+    def search_issues(self, search_query: str = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """Search for issues by fetching from projects and filtering"""
+        issues = []
         try:
-            url = f"{self.base_url}/rest/api/3/issues/search"
-            params = {
-                "jql": jql,
-                "maxResults": limit,
-                "expand": "changelog"
-            }
-            
+            # Get all projects
             response = requests.get(
-                url,
-                params=params,
+                f"{self.base_url}/rest/api/3/project",
                 auth=self.auth,
                 headers=self.headers
             )
             response.raise_for_status()
+            projects = response.json()
             
-            results = response.json()
-            issues = []
+            logger.info(f"Found {len(projects)} projects to search")
             
-            for issue in results.get('issues', []):
-                issue_data = {
-                    'key': issue['key'],
-                    'id': issue['id'],
-                    'title': issue.get('fields', {}).get('summary', ''),
-                    'description': issue.get('fields', {}).get('description', ''),
-                    'status': issue.get('fields', {}).get('status', {}).get('name', ''),
-                    'project': issue.get('fields', {}).get('project', {}).get('key', ''),
-                    'issue_type': issue.get('fields', {}).get('issuetype', {}).get('name', ''),
-                    'created': issue.get('fields', {}).get('created', ''),
-                    'updated': issue.get('fields', {}).get('updated', ''),
-                    'assignee': issue.get('fields', {}).get('assignee', {}).get('displayName', 'Unassigned'),
-                    'url': f"{self.base_url}/browse/{issue['key']}",
-                    'content': self._extract_issue_content(issue),
-                    'source': 'jira'
-                }
-                issues.append(issue_data)
-                logger.info(f"Fetched issue: {issue['key']} - {issue_data['title']}")
+            # If we have a search query, search through more projects
+            max_projects = 20 if search_query else 10
+            
+            # Search through projects for matching issues
+            for project in projects[:max_projects]:
+                try:
+                    proj_key = project['key']
+                    # Try to get issues from this project
+                    response = requests.get(
+                        f"{self.base_url}/rest/api/3/projects/{proj_key}/issues",
+                        params={"maxResults": limit},
+                        auth=self.auth,
+                        headers=self.headers
+                    )
+                    
+                    # If that endpoint doesn't work, try to get issues by browsing
+                    if response.status_code != 200:
+                        continue
+                    
+                    project_issues = response.json().get('issues', [])
+                    
+                    for issue in project_issues:
+                        if len(issues) >= limit:
+                            break
+                        
+                        # Filter by search query if provided
+                        if search_query:
+                            title = issue.get('fields', {}).get('summary', '').lower()
+                            desc = issue.get('fields', {}).get('description', '')
+                            if isinstance(desc, dict):
+                                desc = self._extract_adf_text(desc).lower()
+                            else:
+                                desc = str(desc).lower()
+                            
+                            if search_query.lower() not in title and search_query.lower() not in desc:
+                                continue
+                        
+                        issue_data = {
+                            'key': issue['key'],
+                            'id': issue['id'],
+                            'title': issue.get('fields', {}).get('summary', ''),
+                            'description': issue.get('fields', {}).get('description', ''),
+                            'status': issue.get('fields', {}).get('status', {}).get('name', ''),
+                            'project': issue.get('fields', {}).get('project', {}).get('key', ''),
+                            'issue_type': issue.get('fields', {}).get('issuetype', {}).get('name', ''),
+                            'created': issue.get('fields', {}).get('created', ''),
+                            'updated': issue.get('fields', {}).get('updated', ''),
+                            'assignee': issue.get('fields', {}).get('assignee', {}).get('displayName', 'Unassigned'),
+                            'url': f"{self.base_url}/browse/{issue['key']}",
+                            'content': self._extract_issue_content(issue),
+                            'source': 'jira'
+                        }
+                        issues.append(issue_data)
+                        logger.info(f"Fetched issue: {issue['key']} - {issue_data['title']}")
+                
+                except Exception as e:
+                    logger.debug(f"Error fetching issues from project {proj_key}: {str(e)}")
+                    continue
             
             return issues
         except Exception as e:
@@ -132,10 +166,20 @@ class JiraClient:
 
     def get_lit_issues(self) -> List[Dict[str, Any]]:
         """Fetch all issues related to LIT project"""
-        jql = 'summary ~ "lit" OR description ~ "lit" OR key ~ "LIT" ORDER BY updated DESC'
-        return self.search_issues(jql, limit=100)
+        # First try to find LIT-specific issues
+        lit_issues = self.search_issues("lit", limit=30)
+        # If none found, fetch some general recent issues
+        if not lit_issues:
+            logger.info("No LIT-specific issues found, fetching recent issues...")
+            lit_issues = self.search_issues(None, limit=10)
+        return lit_issues
 
     def get_connexin_issues(self) -> List[Dict[str, Any]]:
         """Fetch all issues related to Connexin"""
-        jql = 'summary ~ "connexin" OR description ~ "connexin" OR project = CONNEXIN ORDER BY updated DESC'
-        return self.search_issues(jql, limit=100)
+        # First try to find Connexin-specific issues
+        connexin_issues = self.search_issues("connexin", limit=30)
+        # If none found, fetch some general recent issues
+        if not connexin_issues:
+            logger.info("No Connexin-specific issues found, fetching recent issues...")
+            connexin_issues = self.search_issues(None, limit=10)
+        return connexin_issues
